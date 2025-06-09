@@ -43,71 +43,47 @@ Server Host: prontoitdbs
  * If slave is up and running and 0 seconds behind master, use slave otherwise use master
 **/
 function getDatabaseConnection($slaveConn, $masterConn) {
-    /* Verify if slave have connection errors */
-    if ($slaveConn->connect_error) {
-    
+    if ($slaveConn->connect_error || !$slaveConn->ping()) {
         return $masterConn;
     }
-    
-    /* Get the database version */
-    $result  = $slaveConn->query("SELECT VERSION() AS version");
-    $row     = $result->fetch_assoc();
+
+    $result = $slaveConn->query("SELECT VERSION() AS version");
+    if (!$result) return $masterConn;
+
+    $row = $result->fetch_assoc();
     $version = $row['version'];
-    
-    /* 
-    Verify if MySQL or MariaDB is used 
-    MariaDB   ---> SHOW SLAVE STATUS
-    MySQL >=8 ---> SHOW REPLICA STATUS
-    MySQL <8  ---> SHOW SLAVE STATUS
-    */
+
     if (stripos($version, 'MariaDB') !== false) {
         $dbVersion = 'MariaDB';
-        $qry       = "SHOW SLAVE STATUS";
+        $qry = "SHOW SLAVE STATUS";
     } else {
-        echo "Database is MySQL, version: $version";
-        $dbVersion = 'MySQL';
-    
-        /* Extract version number */
         preg_match('/^(\d+)\./', $version, $matches);
         $mysqlVersion = isset($matches[1]) ? (int)$matches[1] : 0;
-    
-        if ($mysqlVersion >= 8) {
-            $qry = "SHOW REPLICA STATUS";
-        } else {
-            $qry = "SHOW SLAVE STATUS";
-        }
+        $dbVersion = 'MySQL';
+        $qry = ($mysqlVersion >= 8) ? "SHOW REPLICA STATUS" : "SHOW SLAVE STATUS";
     }
-    
-    /* Verify slave connection */
+
     $result = $slaveConn->query($qry);
-    if ($result === false) {
-        #echo "Error executing query: " . $slaveConn->error;
+    if ($result === false || $result->num_rows === 0) {
         return $masterConn;
     }
-        
-    if ($result->num_rows > 0) {
-        
-        while ($row = $result->fetch_assoc()) {
-    
-            if ($dbVersion == 'MySQL' && $mysqlVersion >= 8) {
-                $slaveIoRunning      = $row['Replica_IO_Running'] ;
-                $slaveSqlRunning     = $row['Replica_SQL_Running'] ;
-                $secondsBehindMaster = $row['Seconds_Behind_Source'] ;
-    
-            }else {
-                $slaveIoRunning      = $row['Slave_IO_Running'] ;
-                $slaveSqlRunning     = $row['Slave_SQL_Running'] ;
-                $secondsBehindMaster = $row['Seconds_Behind_Master'] ;
-            }
-                   
-        }
-        /* Determine if slave is behind or not running correctly */
-        if ($secondsBehindMaster > 1 || $slaveIoRunning !== "Yes" || $slaveSqlRunning !== "Yes") {
-            return $masterConn; 
-        }
+
+    $row = $result->fetch_assoc();
+
+    if ($dbVersion == 'MySQL' && $mysqlVersion >= 8) {
+        $slaveIoRunning      = $row['Replica_IO_Running'] ?? 'No';
+        $slaveSqlRunning     = $row['Replica_SQL_Running'] ?? 'No';
+        $secondsBehindMaster = $row['Seconds_Behind_Source'] ?? 9999;
+    } else {
+        $slaveIoRunning      = $row['Slave_IO_Running'] ?? 'No';
+        $slaveSqlRunning     = $row['Slave_SQL_Running'] ?? 'No';
+        $secondsBehindMaster = $row['Seconds_Behind_Master'] ?? 9999;
     }
-    
-    /* If everything is fine, echo the slave connection */
+
+    if ($secondsBehindMaster > 1 || $slaveIoRunning !== "Yes" || $slaveSqlRunning !== "Yes") {
+        return $masterConn;
+    }
+
     return $slaveConn;
 }
 /*********************************************************************************************************************************************/
